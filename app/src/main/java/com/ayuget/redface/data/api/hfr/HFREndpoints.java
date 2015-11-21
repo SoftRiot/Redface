@@ -42,8 +42,6 @@ public class HFREndpoints implements MDEndpoints {
 
     private static final String USER_PROFILE_URL = "{base_url}/hfr/profil-{user_id}.htm";
 
-    private static final String USER_AVATAR_URL = "http://forum-images.hardware.fr/images/mesdiscussions-{user_id}.png";
-
     private static final String SMILEY_API_HOST = "http://stickersapi.feeligo.com";
 
     private static final String REPLY_URL = "{base_url}/bddpost.php?config=hfr.inc";
@@ -187,11 +185,6 @@ public class HFREndpoints implements MDEndpoints {
                 .put("user_id", user_id)
                 .format()
                 .toString();
-    }
-
-    @Override
-    public String userAvatar(int user_id) {
-        return Phrase.from(USER_AVATAR_URL).put("user_id", user_id).format().toString();
     }
 
     @Override
