@@ -25,7 +25,10 @@ import android.support.v7.widget.Toolbar;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
+import android.view.ActionMode;
 import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
@@ -40,6 +43,7 @@ import com.ayuget.redface.ui.activity.MultiPaneActivity;
 import com.ayuget.redface.ui.activity.WritePrivateMessageActivity;
 import com.ayuget.redface.ui.adapter.TopicPageAdapter;
 import com.ayuget.redface.ui.event.GoToPostEvent;
+import com.ayuget.redface.ui.event.NewPostEvent;
 import com.ayuget.redface.ui.event.PageLoadedEvent;
 import com.ayuget.redface.ui.event.PageRefreshRequestEvent;
 import com.ayuget.redface.ui.event.PageRefreshedEvent;
@@ -51,11 +55,15 @@ import com.ayuget.redface.ui.misc.PagePosition;
 import com.ayuget.redface.ui.misc.SnackbarHelper;
 import com.ayuget.redface.ui.misc.TopicPosition;
 import com.ayuget.redface.ui.misc.UiUtils;
+import com.ayuget.redface.util.JsExecutor;
 import com.hannesdorfmann.fragmentargs.annotation.Arg;
 import com.rengwuxian.materialedittext.MaterialEditText;
 import com.squareup.otto.Subscribe;
+import com.squareup.phrase.Phrase;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import javax.inject.Inject;
 
@@ -66,6 +74,8 @@ public class TopicFragment extends ToolbarFragment implements ViewPager.OnPageCh
 
     private static final String ARG_TOPIC_POSITIONS_STACK = "topicPositionsStack";
 
+    private static final String ARG_TOPIC_QUOTED_MESSAGES = "topicQuotedMessages";
+
     private TopicPageAdapter topicPageAdapter;
 
     private MaterialEditText goToPageEditText;
@@ -75,6 +85,19 @@ public class TopicFragment extends ToolbarFragment implements ViewPager.OnPageCh
     private int previousViewPagerState = ViewPager.SCROLL_STATE_IDLE;
 
     private boolean userScrolledViewPager = false;
+
+    /**
+     * Map of currently quoted messages and their corresponding content,
+     * used for multi-quote feature
+     */
+    private Map quotedMessages;
+
+    private boolean actionModeIsActive = false;
+
+    /**
+     * Used to display a contextual action bar when multi-quote mode is enabled
+     */
+    private ActionMode quoteActionMode;
 
     @Inject
     MDEndpoints mdEndpoints;
@@ -114,10 +137,15 @@ public class TopicFragment extends ToolbarFragment implements ViewPager.OnPageCh
 
         if (savedInstanceState != null) {
             topicPositionsStack = savedInstanceState.getParcelableArrayList(ARG_TOPIC_POSITIONS_STACK);
+            quotedMessages = new LinkedHashMap<>((Map)savedInstanceState.getSerializable(ARG_TOPIC_QUOTED_MESSAGES));
         }
 
         if (topicPositionsStack == null) {
             topicPositionsStack = new ArrayList<>();
+        }
+
+        if (quotedMessages == null) {
+            quotedMessages = new LinkedHashMap<>();
         }
 
         setHasOptionsMenu(true);
@@ -139,6 +167,10 @@ public class TopicFragment extends ToolbarFragment implements ViewPager.OnPageCh
         super.onResume();
 
         pager.addOnPageChangeListener(this);
+
+        if (quotedMessages.size() > 0) {
+            updateMultiQuoteMode();
+        }
     }
 
     @Override
@@ -153,6 +185,9 @@ public class TopicFragment extends ToolbarFragment implements ViewPager.OnPageCh
         super.onSaveInstanceState(outState);
 
         outState.putParcelableArrayList(ARG_TOPIC_POSITIONS_STACK, topicPositionsStack);
+
+        // don't know why, but putting directly quotedMessages as parameter leads to a compilation error...
+        outState.putSerializable(ARG_TOPIC_QUOTED_MESSAGES, new LinkedHashMap<>(quotedMessages));
     }
 
     @Override
@@ -429,5 +464,84 @@ public class TopicFragment extends ToolbarFragment implements ViewPager.OnPageCh
 
         dialog.show();
         positiveAction.setEnabled(false);
+    }
+
+    protected void addQuote(long postId, String quoteBBCode) {
+        quotedMessages.put(postId, quoteBBCode);
+        updateMultiQuoteMode();
+    }
+
+    protected void removeQuote(long postId) {
+        quotedMessages.remove(postId);
+        updateMultiQuoteMode();
+    }
+
+    protected void clearQuotes() {
+        quotedMessages.clear();
+        updateMultiQuoteMode();
+    }
+
+    protected Map<Long, String> getQuotes() {
+        return quotedMessages;
+    }
+
+    private void updateMultiQuoteMode() {
+        if (actionModeIsActive) {
+            quoteActionMode.setTitle(Phrase.from(getContext(), R.string.quoted_messages_plural).put("count", quotedMessages.size()).format());
+            return;
+        }
+
+        quoteActionMode = getActivity().startActionMode(new ActionMode.Callback() {
+
+            @Override
+            public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+
+                actionModeIsActive = true;
+
+                if (quotedMessages.size() > 1) {
+                    mode.setTitle(Phrase.from(getContext(), R.string.quoted_messages_plural).put("count", quotedMessages.size()).format());
+                } else {
+                    mode.setTitle(R.string.quoted_messages);
+                }
+
+                MenuInflater inflater = mode.getMenuInflater();
+                inflater.inflate(R.menu.menu_multi_quote, menu);
+
+                onBatchOperation(true);
+
+                inflater = null; // Force GC
+
+                return true;
+            }
+
+            @Override
+            public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+                return false;
+            }
+
+            @Override
+            public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                switch (item.getItemId()) {
+                    case R.id.action_multiquote:
+                        bus.post(new NewPostEvent(currentPage, getQuotes()));
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+
+            @Override
+            public void onDestroyActionMode(ActionMode mode) {
+
+                actionModeIsActive = false;
+
+                clearQuotes();
+                onBatchOperation(false);
+            }
+        });
+    }
+
+    protected void stopMultiQuoteMode() {
+        quoteActionMode.finish();
     }
 }

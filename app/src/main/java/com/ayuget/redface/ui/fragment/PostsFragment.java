@@ -43,6 +43,7 @@ import com.ayuget.redface.data.rx.SubscriptionHandler;
 import com.ayuget.redface.ui.UIConstants;
 import com.ayuget.redface.ui.activity.MultiPaneActivity;
 import com.ayuget.redface.ui.activity.ReplyActivity;
+import com.ayuget.redface.ui.event.NewPostEvent;
 import com.ayuget.redface.ui.event.PageRefreshRequestEvent;
 import com.ayuget.redface.ui.event.PageSelectedEvent;
 import com.ayuget.redface.ui.event.ScrollToPostEvent;
@@ -55,7 +56,6 @@ import com.squareup.leakcanary.RefWatcher;
 import com.squareup.otto.Subscribe;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -121,12 +121,6 @@ public class PostsFragment extends BaseFragment {
 
     private SubscriptionHandler<Long, String> quoteHandler = new SubscriptionHandler<>();
 
-    /**
-     * Map of currently quoted messages and their corresponding content,
-     * used for multi-quote feature
-     */
-    private Map<Long, String> quotedMessages;
-
     @Override
     public void onCreate(Bundle savedInstanceState) {
         Log.d(LOG_TAG, String.format("@%d -> Fragment(currentPage=%d) -> onCreate", System.identityHashCode(this), currentPage));
@@ -139,8 +133,6 @@ public class PostsFragment extends BaseFragment {
         else {
             currentScrollPosition = savedInstanceState.getInt(ARG_SAVED_SCROLL_POSITION, 0);
         }
-
-        quotedMessages = new LinkedHashMap<>();
     }
 
     @Override
@@ -200,7 +192,8 @@ public class PostsFragment extends BaseFragment {
             @Override
             public void onClick(View v) {
                 Joiner joiner = Joiner.on("\n");
-                startReplyActivity(joiner.join(quotedMessages.values()));
+                Map<Long, String> quotes = ((TopicFragment) getParentFragment()).getQuotes();
+                startReplyActivity(joiner.join(quotes.values()));
             }
         });
 
@@ -227,15 +220,10 @@ public class PostsFragment extends BaseFragment {
         topicPageView.setOnMultiQuoteModeListener(new TopicPageView.OnMultiQuoteModeListener() {
             @Override
             public void onMultiQuoteModeToggled(boolean active) {
-                if (active) {
-                    quotedMessages.clear();
-                }
-
                 Fragment parent = getParentFragment();
 
-                if (parent != null) {
-                    // Multi-quote event is forwarded to parent fragment as a batch operation
-                    ((TopicFragment) parent).onBatchOperation(active);
+                if (parent != null && !active) {
+                    ((TopicFragment) parent).stopMultiQuoteMode();
                 }
             }
 
@@ -244,7 +232,7 @@ public class PostsFragment extends BaseFragment {
               subscribe(quoteHandler.load(postId, mdService.getQuote(userManager.getActiveUser(), topic, (int) postId), new EndlessObserver<String>() {
                   @Override
                   public void onNext(String quoteBBCode) {
-                      quotedMessages.put(postId, quoteBBCode);
+                      ((TopicFragment) getParentFragment()).addQuote(postId, quoteBBCode);
                   }
 
                   @Override
@@ -257,14 +245,7 @@ public class PostsFragment extends BaseFragment {
 
             @Override
             public void onPostRemoved(long postId) {
-                quotedMessages.remove(postId);
-            }
-
-            @Override
-            public void onQuote() {
-                Joiner joiner = Joiner.on("\n");
-                topicPageView.disableBatchActions();
-                startReplyActivity(joiner.join(quotedMessages.values()));
+                ((TopicFragment) getParentFragment()).removeQuote(postId);
             }
         });
 
@@ -281,9 +262,6 @@ public class PostsFragment extends BaseFragment {
         super.onPause();
 
         savePageScrollPosition();
-
-        // Disable batch actions because, for now, we are unable to save them properly
-        topicPageView.disableBatchActions();
     }
 
     @Override
@@ -440,6 +418,14 @@ public class PostsFragment extends BaseFragment {
     @Subscribe public void onScrollToPost(ScrollToPostEvent event) {
         if (event.getTopic() == topic && event.getPage() == currentPage) {
             topicPageView.setPagePosition(event.getPagePosition());
+        }
+    }
+
+    @Subscribe public void onNewPostEvent(NewPostEvent event) {
+        if (event.getPage() == currentPage) {
+            Map<Long, String> quotes = event.getQuotes();
+            Joiner joiner = Joiner.on("\n");
+            startReplyActivity(joiner.join(quotes.values()));
         }
     }
 
